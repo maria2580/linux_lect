@@ -50,7 +50,6 @@ void sinx_taylor(int num_elements, int terms, double* x, double* result)
 			break;
 		case 0:
 			// Child: 계산하고 자신의 파이프에 결과 쓰기
-			close(pipes[myidx][0]); // read end 닫기
 			double value = sin_taylor_at(x[myidx], terms);
 			ssize_t n = write(pipes[myidx][1], &value, sizeof(value));
 			if (n != (ssize_t)sizeof(value)) {
@@ -60,7 +59,7 @@ void sinx_taylor(int num_elements, int terms, double* x, double* result)
 			_exit(0);
 			break;
 		default:
-			// parent 모든 프로세스 종료까지 대기
+			// 부모는 모든 pid가 종료됐는지 순차적으로 확인
 			for (int i = 0; i < num_elements; ++i) {
 				waitpid(pids[i], NULL, 0);
 			}
