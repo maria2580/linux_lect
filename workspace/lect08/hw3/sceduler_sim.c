@@ -25,6 +25,8 @@ typedef struct {
     int time_quantum_left;
     int io_wait_time;
     int total_wait_time; // 대기 시간 누적
+    int current_wait_time; // 현재 대기 시간 (이번 턴)
+    int execution_count; // 실행 횟수 (CPU 할당 횟수)
     int state; // 0: ready, 1: running, 2: waiting, 3: terminated
 } PCB;
 
@@ -128,6 +130,8 @@ void make_process(int index) {
         new_pcb->time_quantum_left = TIME_QUANTUM;
         new_pcb->io_wait_time = 0;
         new_pcb->total_wait_time = 0; // 초기화
+        new_pcb->current_wait_time = 0; // 초기화
+        new_pcb->execution_count = 0; // 초기화
         new_pcb->state = 0; // ready
         enqueue(&state->ready_queue, index); // 레디 큐에 추가
         printf("프로세스 %d 생성 (PID: %d, Burst: %d)\n", index, chldPid, new_pcb->burst_time);
@@ -179,14 +183,6 @@ void handle_child_exit(int signo) {
 void schedule_tick(int signo) {
     printf("\n--- Tick ---\n");
 
-    // 0. Ready Queue에 있는 프로세스들의 대기 시간 증가
-    int ready_count = state->ready_queue.count;
-    int r_idx_ptr = state->ready_queue.front;
-    for(int i=0; i<ready_count; i++){
-        int p_idx = state->ready_queue.pids[r_idx_ptr];
-        state->process_table[p_idx].total_wait_time++;
-        r_idx_ptr = (r_idx_ptr + 1) % NUM_PROCESSES;
-    }
 
     printf("현재 실행 중: %d\n", state->current_process_idx);
     printf("현재 레디큐: ");
@@ -254,8 +250,13 @@ void schedule_tick(int signo) {
             // [수정] 여기서 리필하지 않음! (Epoch 방식)
             // state->process_table[found_idx].time_quantum_left = TIME_QUANTUM; 
             state->current_process_idx = found_idx;
-            printf("스케줄러: Ready Queue에서 프로세스 %d (PID: %d) 선택하여 실행 (남은 퀀텀: %d)\n", 
-                   found_idx, state->process_table[found_idx].pid, state->process_table[found_idx].time_quantum_left);
+            
+            // 대기 시간 누적 및 초기화
+            state->process_table[found_idx].total_wait_time += state->process_table[found_idx].current_wait_time;
+            state->process_table[found_idx].execution_count++;
+            printf("스케줄러: Ready Queue에서 프로세스 %d (PID: %d) 선택하여 실행 (남은 퀀텀: %d, 이번 턴 대기: %d)\n", 
+                   found_idx, state->process_table[found_idx].pid, state->process_table[found_idx].time_quantum_left, state->process_table[found_idx].current_wait_time);
+            state->process_table[found_idx].current_wait_time = 0;
         } else {
             printf("스케줄러: 실행 가능한 프로세스가 없음 (모두 퀀텀 소진 or 큐 비어있음)\n");
         }
@@ -291,6 +292,15 @@ void schedule_tick(int signo) {
         }
     }
 
+    // 3.1 Ready Queue에 있는 프로세스들의 대기 시간 증가 (스케줄링 후 대기 중인 프로세스만)
+    int ready_count = state->ready_queue.count;
+    int r_idx_ptr = state->ready_queue.front;
+    for(int i=0; i<ready_count; i++){
+        int p_idx = state->ready_queue.pids[r_idx_ptr];
+        state->process_table[p_idx].current_wait_time++;
+        r_idx_ptr = (r_idx_ptr + 1) % NUM_PROCESSES;
+    }
+
    
     // 4. 모든 프로세스가 종료되었는지 확인
     int all_done = 1;
@@ -305,11 +315,21 @@ void schedule_tick(int signo) {
         
         // 평균 대기 시간 계산 및 출력
         int total_wait_sum = 0;
+        float total_avg_wait_per_exec_sum = 0;
+
         for(int i=0; i<NUM_PROCESSES; i++){
-            printf("Process %d Total Wait Time: %d\n", i, state->process_table[i].total_wait_time);
+            int count = state->process_table[i].execution_count;
+            if (count == 0) count = 1; // 0으로 나누기 방지
+            float avg_wait_per_exec = (float)state->process_table[i].total_wait_time / count;
+
+            printf("Process %d Total Wait: %d, Exec Count: %d, Avg Wait/Exec: %.2f\n", 
+                   i, state->process_table[i].total_wait_time, state->process_table[i].execution_count, avg_wait_per_exec);
+            
             total_wait_sum += state->process_table[i].total_wait_time;
+            total_avg_wait_per_exec_sum += avg_wait_per_exec;
         }
-        printf("평균 대기 시간: %.2f\n", (float)total_wait_sum / NUM_PROCESSES);
+        printf("전체 평균 대기 시간 (Total / N): %.2f\n", (float)total_wait_sum / NUM_PROCESSES);
+        printf("전체 평균 실행 당 대기 시간 (Avg Wait/Exec / N): %.2f\n", total_avg_wait_per_exec_sum / NUM_PROCESSES);
 
         exit(0);
     }
